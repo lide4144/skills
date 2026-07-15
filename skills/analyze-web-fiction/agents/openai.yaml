@@ -1,0 +1,4 @@
+interface:
+  display_name: "网文创作眼"
+  short_description: "从创作决策、冲突转译和情绪机制深度拆解中文网络小说文本"
+  default_prompt: "Use $analyze-web-fiction to deeply analyze this web-fiction text through the author's creative decisions."
