@@ -19,11 +19,24 @@ def spans(text: str):
     units, _ = split_chapter_spans(text)
     return [(u["start"], u["end"], u["title"]) for u in units]
 
-def samples(text: str, size=6000):
+def samples(text: str, target_chars=10000, max_chars=16000, max_radius=30):
+    """Yield stratified, adaptively expanded event clusters."""
     units = spans(text); positions = (0, .03, .15, .35, .55, .75, .92, 1)
     for i in sorted({round((len(units)-1)*p) for p in positions}):
-        start, end, title = units[i]
-        yield f"章节单元 {i+1}/{len(units)}：{title}", text[start:min(end, start+size)]
+        left = right = i
+        while units[right][1] - units[left][0] < target_chars:
+            changed = False
+            if left > 0 and i-left < max_radius:
+                left -= 1; changed = True
+            if units[right][1] - units[left][0] >= target_chars: break
+            if right + 1 < len(units) and right-i < max_radius:
+                right += 1; changed = True
+            if not changed: break
+        start, end = units[left][0], units[right][1]
+        body = text[start:min(end, start+max_chars)]
+        label = (f"事件簇 {left+1}–{right+1}/{len(units)}（中心章 {i+1}:{units[i][2]}；"
+                 f"起 {units[left][2]}；止 {units[right][2]}）")
+        yield label, body
 
 def chunks(text: str, target: int):
     result, bodies, labels, size = [], [], [], 0
@@ -49,8 +62,8 @@ def skill_prompt(skill: Path):
 def sample_run(source, text, output, skill, cwd, model):
     material = "\n\n".join(f"## {label}\n\n{body}" for label, body in samples(text))
     invoke(f"""{skill_prompt(skill)}
-对《{source.stem}》做跨全书分层取样分析。开头醒目标注“取样分析”并列出覆盖，不得把未读内容写成事实。
-检验创作发动机、信息差、冲突转译、情绪兑现、爽点/认知快感轮换与结构演变；至少提出一个反例或替代解释。
+对《{source.stem}》做跨全书“均匀位置＋相邻章节事件簇”取样分析。开头醒目标注“取样分析”并列出覆盖，不得把未读内容写成事实。
+先写未经术语加工的阅读体验底稿，再提出至少两个竞争性总体解释并用证据、反例和盲区比较；不要默认作品核心一定是解释权或认知快感。检验设定新颖性、情感微反应与关系余波、价值选择及代价、情绪兑现和结构演变。正文避免重复，详细坐标放证据附录。
 
 {material}""", output, cwd, model)
 
@@ -74,14 +87,14 @@ def full_run(source, text, output, skill, cwd, model, chunk_chars, keep):
         if note.exists(): continue
         invoke(f"""{skill_prompt(skill)}
 这是《{source.stem}》完整顺序阅读的第 {i}/{len(sections)} 区段（{label}）。产出综合用编辑观察，不写全书结论。
-记录创作节点、信息状态、冲突层次、情绪波形、结构单元、兑现与遗留承诺，附简短位置证据，并指出至少一处有效或失效机制。
+先记录不带理论术语的阅读体验和触发点，再记录信息状态、承诺与兑现、关系微反应及余波、设定新增约束、价值选择及代价。提出本区段至少两个可能解释，说明各自证据与盲区，并指出至少一处有效或失效机制。
 
 {body}""", note, cwd, model)
     reduced = reduce_notes(notes, skill, cwd, model, work)
     material = "\n\n".join(p.read_text(encoding="utf-8") for p in reduced)
     invoke(f"""{skill_prompt(skill)}
-根据顺序覆盖全书的阶段笔记，为《{source.stem}》写完整深度报告。区分持续模式、阶段变化与反例；不要拼接摘要。
-说明情绪和结构演变、开篇承诺的兑现，并给出保持作品类型目标的具体修改建议。
+根据顺序覆盖全书的阶段笔记，为《{source.stem}》写完整深度报告。先用体验底稿校验理论，再比较至少两个竞争性解释；区分持续模式、阶段变化与反例，不要拼接摘要或重复同一结论。
+必须讨论设定新意是否进入因果、至少一条跨章节情感链、价值如何进入选择与代价、情绪和结构演变及开篇承诺兑现。正文精炼，坐标与置信度放证据附录，并给出保持作品类型目标的具体修改建议。
 
 {material}""", output, cwd, model)
     if not keep:
