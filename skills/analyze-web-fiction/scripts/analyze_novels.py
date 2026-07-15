@@ -63,7 +63,7 @@ def sample_run(source, text, output, skill, cwd, model):
     material = "\n\n".join(f"## {label}\n\n{body}" for label, body in samples(text))
     invoke(f"""{skill_prompt(skill)}
 对《{source.stem}》做跨全书“均匀位置＋相邻章节事件簇”取样分析。开头醒目标注“取样分析”并列出覆盖，不得把未读内容写成事实。
-先写未经术语加工的阅读体验底稿，再提出至少两个竞争性总体解释并用证据、反例和盲区比较；不要默认作品核心一定是解释权或认知快感。检验设定新颖性、情感微反应与关系余波、价值选择及代价、情绪兑现和结构演变。正文避免重复，详细坐标放证据附录。
+先写未经术语加工的阅读体验底稿，再提出至少两个竞争性总体解释并用证据、反例和盲区比较；不要默认作品核心一定是解释权或认知快感。检验设定新颖性、情感微反应与关系余波、价值选择及代价、情绪兑现和结构演变。必须另写无分析术语的“普通读者席”，并从证据生成 2–4 张“创作启示卡”（机制、条件、迁移原则、两个变体、故事问题、模仿风险）。正文避免重复，详细坐标放证据附录。
 
 {material}""", output, cwd, model)
 
@@ -74,7 +74,7 @@ def reduce_notes(paths, skill, cwd, model, work, batch=10):
         for i in range(0, len(current), batch):
             target = work / f"汇总_L{level}_{i//batch+1:03d}.md"
             material = "\n\n".join(p.read_text(encoding="utf-8") for p in current[i:i+batch])
-            invoke(f"{skill_prompt(skill)}\n把以下连续观察压缩成阶段笔记。保留位置证据、模式变化、承诺与兑现、反例和不确定性；不要做全书结论。\n\n{material}", target, cwd, model)
+            invoke(f"{skill_prompt(skill)}\n把以下连续观察压缩成阶段笔记。保留位置证据、模式变化、承诺与兑现、普通读者的追读/疲劳/记忆信号、可迁移机制、反例和不确定性；不要做全书结论。\n\n{material}", target, cwd, model)
             nxt.append(target)
         current, level = nxt, level+1
     return current
@@ -87,14 +87,14 @@ def full_run(source, text, output, skill, cwd, model, chunk_chars, keep):
         if note.exists(): continue
         invoke(f"""{skill_prompt(skill)}
 这是《{source.stem}》完整顺序阅读的第 {i}/{len(sections)} 区段（{label}）。产出综合用编辑观察，不写全书结论。
-先记录不带理论术语的阅读体验和触发点，再记录信息状态、承诺与兑现、关系微反应及余波、设定新增约束、价值选择及代价。提出本区段至少两个可能解释，说明各自证据与盲区，并指出至少一处有效或失效机制。
+先记录不带理论术语的阅读体验和触发点，包括追读问题、疲劳点、记忆画面及人物亲近/戒备变化；再记录信息状态、承诺与兑现、关系微反应及余波、设定新增约束、价值选择及代价。提出本区段至少两个可能解释，说明各自证据与盲区，并指出至少一处有效或失效机制。
 
 {body}""", note, cwd, model)
     reduced = reduce_notes(notes, skill, cwd, model, work)
     material = "\n\n".join(p.read_text(encoding="utf-8") for p in reduced)
     invoke(f"""{skill_prompt(skill)}
 根据顺序覆盖全书的阶段笔记，为《{source.stem}》写完整深度报告。先用体验底稿校验理论，再比较至少两个竞争性解释；区分持续模式、阶段变化与反例，不要拼接摘要或重复同一结论。
-必须讨论设定新意是否进入因果、至少一条跨章节情感链、价值如何进入选择与代价、情绪和结构演变及开篇承诺兑现。正文精炼，坐标与置信度放证据附录，并给出保持作品类型目标的具体修改建议。
+必须讨论设定新意是否进入因果、至少一条跨章节情感链、价值如何进入选择与代价、情绪和结构演变及开篇承诺兑现。另写无编辑术语的“普通读者席”，并生成 2–4 张可迁移创作启示卡（机制、成立条件、迁移原则、两个变体、故事问题、模仿风险）。正文精炼，坐标与置信度放证据附录，并给出保持作品类型目标的具体修改建议。
 
 {material}""", output, cwd, model)
     if not keep:
