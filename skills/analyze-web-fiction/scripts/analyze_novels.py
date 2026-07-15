@@ -4,24 +4,20 @@
 from __future__ import annotations
 import argparse, re, subprocess, sys
 from pathlib import Path
+from split_novel import chapter_spans as split_chapter_spans, clean_text as split_clean_text, read_text as split_read_text
 
 EXTENSIONS = {".txt", ".md"}
 CHAPTER_RE = re.compile(r"(?m)^\s*(?:第[零〇一二三四五六七八九十百千万两\d]+[章节卷回集部篇]\s*[^\n]*|\d+[、.]\s*第?[^\n]{0,80})\s*$")
 
 def read_text(path: Path) -> str:
-    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
-        try: return path.read_text(encoding=encoding)
-        except UnicodeDecodeError: pass
-    raise ValueError(f"无法识别文本编码: {path}")
+    return split_read_text(path)[0]
 
 def clean(text: str) -> str:
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return re.sub(r"(?m)^.*(?:请点击下一页继续阅读|最新网址|手机用户请浏览|本章未完).*$", "", text)
+    return split_clean_text(text)
 
 def spans(text: str):
-    matches = list(CHAPTER_RE.finditer(text))
-    if not matches: return [(0, len(text), "全文")]
-    return [(m.start(), matches[i+1].start() if i+1 < len(matches) else len(text), m.group().strip()) for i, m in enumerate(matches)]
+    units, _ = split_chapter_spans(text)
+    return [(u["start"], u["end"], u["title"]) for u in units]
 
 def samples(text: str, size=6000):
     units = spans(text); positions = (0, .03, .15, .35, .55, .75, .92, 1)
