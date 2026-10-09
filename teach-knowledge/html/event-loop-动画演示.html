@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Event Loop 动画演示</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0f172a; color: #e2e8f0;
+    min-height: 100vh; padding: 24px;
+  }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 4px; }
+  h1 .en { color: #38bdf8; }
+  .subtitle { text-align: center; color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+  .controls {
+    display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  button {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 14px;
+    transition: all .15s;
+  }
+  button:hover:not(:disabled) { background: #334155; border-color: #38bdf8; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.primary { background: #0369a1; border-color: #38bdf8; }
+  button.primary:hover:not(:disabled) { background: #0284c7; }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr 90px 1fr;
+    grid-template-rows: auto auto;
+    gap: 14px; max-width: 980px; margin: 0 auto;
+  }
+  .panel {
+    background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+    padding: 14px; min-height: 300px; position: relative; overflow: hidden;
+  }
+  .panel h2 {
+    font-size: 14px; color: #38bdf8; margin-bottom: 4px; font-weight: 600;
+  }
+  .panel .cn { font-size: 12px; color: #94a3b8; margin-bottom: 12px; }
+
+  /* Call Stack: items stack from bottom */
+  #stackArea {
+    display: flex; flex-direction: column-reverse; gap: 6px;
+    min-height: 220px;
+  }
+  /* Task Queue: items left to right */
+  #queueArea {
+    display: flex; flex-direction: row; gap: 6px; align-items: flex-start;
+    min-height: 60px; flex-wrap: wrap;
+  }
+  .frame {
+    background: #334155; border: 1px solid #475569; border-radius: 8px;
+    padding: 8px 12px; font-family: "SF Mono", Consolas, monospace; font-size: 13px;
+    white-space: nowrap; position: relative;
+    transition: transform .45s cubic-bezier(.4,0,.2,1), opacity .45s;
+  }
+  .frame.fn { border-left: 3px solid #38bdf8; }
+  .frame.cb { border-left: 3px solid #f59e0b; background: #3a2f1a; }
+  .frame.main { border-left: 3px solid #22c55e; }
+  .frame.active { box-shadow: 0 0 12px rgba(56,189,248,.5); }
+
+  /* Event loop middle column */
+  .loopCol {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px;
+  }
+  .loopCircle {
+    width: 76px; height: 76px; border-radius: 50%;
+    border: 3px dashed #64748b; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #94a3b8; text-align: center;
+    transition: border-color .3s;
+  }
+  .loopCircle.spin { border-color: #38bdf8; animation: spin 2s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .arrow { font-size: 20px; color: #475569; transition: color .3s; }
+  .arrow.lit { color: #38bdf8; text-shadow: 0 0 8px rgba(56,189,248,.8); }
+
+  /* Web APIs panel */
+  .webapis { grid-column: 1 / -1; min-height: 90px; }
+  #webapiArea { display: flex; gap: 8px; flex-wrap: wrap; min-height: 44px; }
+  .timer {
+    background: #2d1f3d; border: 1px solid #a855f7; border-radius: 8px;
+    padding: 8px 12px; font-family: Consolas, monospace; font-size: 13px;
+    border-left: 3px solid #a855f7;
+  }
+  .timer .count { color: #c084fc; font-weight: bold; }
+
+  /* Log */
+  .logPanel {
+    max-width: 980px; margin: 16px auto 0; background: #020617;
+    border: 1px solid #1e293b; border-radius: 12px; padding: 14px;
+    font-family: Consolas, monospace; font-size: 12.5px; min-height: 110px;
+  }
+  .logPanel h2 { font-size: 13px; color: #64748b; margin-bottom: 8px; font-family: sans-serif; }
+  #log div { padding: 2px 0; opacity: 0; animation: fadeIn .3s forwards; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  .lg-push { color: #38bdf8; } .lg-pop { color: #f87171; }
+  .lg-timer { color: #c084fc; } .lg-queue { color: #f59e0b; }
+  .lg-loop { color: #22c55e; } .lg-out { color: #e2e8f0; font-weight: bold; }
+
+  .flying {
+    position: fixed; z-index: 50; pointer-events: none;
+    transition: transform .6s cubic-bezier(.5,0,.3,1), opacity .6s;
+  }
+  .legend {
+    max-width: 980px; margin: 14px auto 0; display: flex; gap: 18px;
+    justify-content: center; font-size: 12px; color: #94a3b8; flex-wrap: wrap;
+  }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<h1><span class="en">Event Loop</span> 动画演示</h1>
+<p class="subtitle">观察同步代码如何执行、setTimeout 如何经过 Web APIs 进入 Task Queue，最终被 Event Loop 调度执行</p>
+
+<div class="controls">
+  <button class="primary" id="btnRun">▶ 运行示例</button>
+  <button id="btnStep" disabled>⏭ 单步执行</button>
+  <button id="btnReset">↺ 重置</button>
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#94a3b8;">
+    速度
+    <select id="speed" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px 8px;">
+      <option value="1600">慢</option>
+      <option value="900" selected>中</option>
+      <option value="450">快</option>
+    </select>
+  </label>
+</div>
+
+<div class="stage">
+  <div class="panel">
+    <h2>Call Stack</h2>
+    <div class="cn">调用栈 — 同步代码立即入栈执行（LIFO 后进先出）</div>
+    <div id="stackArea"></div>
+  </div>
+
+  <div class="loopCol">
+    <div class="arrow" id="arrToQueue">→</div>
+    <div class="loopCircle" id="loopCircle">Event<br>Loop</div>
+    <div class="arrow" id="arrToStack">←</div>
+  </div>
+
+  <div class="panel">
+    <h2>Task Queue</h2>
+    <div class="cn">任务队列 — 异步回调在此排队，等待 Call Stack 清空（FIFO 先进先出）</div>
+    <div id="queueArea"></div>
+  </div>
+
+  <div class="panel webapis">
+    <h2>Web APIs</h2>
+    <div class="cn">浏览器提供的异步能力（setTimeout / DOM 事件 / fetch）— 计时器在这里倒计时，到期后回调被送入 Task Queue</div>
+    <div id="webapiArea"></div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><span class="dot" style="background:#22c55e;"></span>main() 主脚本</span>
+  <span><span class="dot" style="background:#38bdf8;"></span>普通函数 function call</span>
+  <span><span class="dot" style="background:#a855f7;"></span>Web API 计时中</span>
+  <span><span class="dot" style="background:#f59e0b;"></span>异步回调 callback</span>
+</div>
+
+<div class="logPanel">
+  <h2>执行日志 Console Output</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+const stackArea = document.getElementById('stackArea');
+const queueArea = document.getElementById('queueArea');
+const webapiArea = document.getElementById('webapiArea');
+const logEl = document.getElementById('log');
+const loopCircle = document.getElementById('loopCircle');
+const arrToQueue = document.getElementById('arrToQueue');
+const arrToStack = document.getElementById('arrToStack');
+const btnRun = document.getElementById('btnRun');
+const btnStep = document.getElementById('btnStep');
+const btnReset = document.getElementById('btnReset');
+const speedSel = document.getElementById('speed');
+
+let steps = [], stepIdx = 0, playing = false, timerId = null;
+
+function delay() { return parseInt(speedSel.value); }
+
+function log(msg, cls) {
+  const d = document.createElement('div');
+  d.className = cls || '';
+  d.textContent = msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function makeFrame(text, cls) {
+  const f = document.createElement('div');
+  f.className = 'frame ' + (cls || 'fn');
+  f.textContent = text;
+  return f;
+}
+
+function centerOf(el) {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+}
+
+/* 飞行动画：克隆元素从 from 区域飞到 to 区域 */
+function fly(text, cls, fromEl, toEl, done) {
+  const c1 = centerOf(fromEl), c2 = centerOf(toEl);
+  const ghost = makeFrame(text, cls);
+  ghost.classList.add('flying');
+  ghost.style.left = (c1.x - c1.w / 2) + 'px';
+  ghost.style.top = (c1.y - c1.h / 2) + 'px';
+  document.body.appendChild(ghost);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      ghost.style.transform = `translate(${c2.x - c1.x}px, ${c2.y - c1.y}px)`;
+      ghost.style.opacity = '0.9';
+    });
+  });
+  setTimeout(() => { ghost.remove(); done && done(); }, 620);
+}
+
+/* ---------- 动作原语（每步是一个函数） ---------- */
+
+function pushStack(text, cls) {
+  return () => {
+    const f = makeFrame(text, cls);
+    f.style.opacity = '0';
+    stackArea.appendChild(f);
+    requestAnimationFrame(() => { f.style.opacity = '1'; });
+    markTopActive();
+    log('📥 push → Call Stack: ' + text, 'lg-push');
+  };
+}
+function popStack() {
+  return () => {
+    const top = stackArea.lastElementChild;
+    if (top) {
+      log('📤 pop ← Call Stack: ' + top.textContent + '（执行完毕出栈）', 'lg-pop');
+      top.style.opacity = '0';
+      top.style.transform = 'translateY(-14px)';
+      setTimeout(() => { top.remove(); markTopActive(); }, 400);
+    }
+  };
+}
+function markTopActive() {
+  [...stackArea.children].forEach(c => c.classList.remove('active'));
+  if (stackArea.lastElementChild) stackArea.lastElementChild.classList.add('active');
+}
+function startTimer(label, seconds) {
+  return () => {
+    const t = document.createElement('div');
+    t.className = 'timer';
+    t.dataset.label = label;
+    t.innerHTML = label + ' <span class="count">' + seconds.toFixed(1) + 's</span>';
+    webapiArea.appendChild(t);
+    log('⏱ Web API 开始计时: ' + label + '（' + seconds + 's，不阻塞主线程）', 'lg-timer');
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const left = seconds - (Date.now() - t0) / 1000;
+      if (left <= 0) { clearInterval(iv); t.querySelector('.count').textContent = '到期!'; }
+      else t.querySelector('.count').textContent = left.toFixed(1) + 's';
+    }, 100);
+  };
+}
+function timerToQueue(label, cbText) {
+  return () => {
+    const t = [...webapiArea.children].find(x => x.dataset.label === label);
+    arrToQueue.classList.add('lit');
+    const done = () => {
+      if (t) t.remove();
+      queueArea.appendChild(makeFrame(cbText, 'cb'));
+      arrToQueue.classList.remove('lit');
+      log('📨 计时到期 → callback 移入 Task Queue: ' + cbText, 'lg-queue');
+    };
+    if (t) fly(cbText, 'cb', t, queueArea, done); else done();
+  };
+}
+function loopCheck(hasWork) {
+  return () => {
+    loopCircle.classList.add('spin');
+    log(hasWork
+      ? '🔄 Event Loop 检查：Call Stack 已空 → 从 Task Queue 取出队首 callback'
+      : '🔄 Event Loop 检查：Call Stack 未空 / Queue 为空 → 继续等待…', 'lg-loop');
+    setTimeout(() => loopCircle.classList.remove('spin'), delay() * 0.9);
+  };
+}
+function dequeueToStack() {
+  return () => {
+    const first = queueArea.firstElementChild;
+    if (!first) return;
+    arrToStack.classList.add('lit');
+    const text = first.textContent;
+    fly(text, 'cb', first, stackArea, () => {
+      first.remove();
+      stackArea.appendChild(makeFrame(text, 'cb'));
+      markTopActive();
+      arrToStack.classList.remove('lit');
+      log('📥 callback 进入 Call Stack 开始执行: ' + text, 'lg-push');
+    });
+  };
+}
+function out(text) {
+  return () => log('🖨 console: ' + text, 'lg-out');
+}
+function note(text) {
+  return () => log('💡 ' + text, 'lg-loop');
+}
+
+/* ---------- 编排演示脚本 ----------
+   演示代码:
+   console.log("start");
+   setTimeout(() => console.log("timeout 0s"), 0);
+   setTimeout(() => console.log("timeout 1s"), 1000);
+   console.log("end");
+----------------------------------- */
+function buildSteps() {
+  return [
+    note('开始执行主脚本 main() —— 对应代码见下方注释'),
+    pushStack('main()', 'main'),
+    out('console.log("start")'),
+    pushStack('console.log("start")'),
+    popStack(),
+    note('遇到 setTimeout(cb, 0)：回调不会立即执行，交给 Web API 计时'),
+    pushStack('setTimeout(cb0, 0)'),
+    startTimer('setTimeout 0ms', 1.2),
+    popStack(),
+    pushStack('setTimeout(cb1, 1000)'),
+    startTimer('setTimeout 1000ms', 2.4),
+    popStack(),
+    pushStack('console.log("end")'),
+    out('console.log("end")'),
+    popStack(),
+    note('主脚本执行完毕，main() 出栈 —— 注意此时两个 timeout 都还没打印!'),
+    popStack(),
+    timerToQueue('setTimeout 0ms', 'cb0: log("timeout 0s")'),
+    loopCheck(true),
+    dequeueToStack(),
+    out('console.log("timeout 0s")  ← 即使延迟 0ms 也要排队!'),
+    popStack(),
+    timerToQueue('setTimeout 1000ms', 'cb1: log("timeout 1s")'),
+    loopCheck(true),
+    dequeueToStack(),
+    out('console.log("timeout 1s")'),
+    popStack(),
+    loopCheck(false),
+    note('✅ 全部完成。输出顺序: start → end → timeout 0s → timeout 1s'),
+    note('核心结论：setTimeout 的回调永远等 Call Stack 清空后才执行，这就是 Event Loop 的调度规则。'),
+  ];
+}
+
+function runStep() {
+  if (stepIdx >= steps.length) { stop(); return; }
+  steps[stepIdx++]();
+  btnStep.textContent = `⏭ 单步执行 (${stepIdx}/${steps.length})`;
+  if (stepIdx >= steps.length) stop();
+}
+function play() {
+  if (playing) return;
+  playing = true;
+  btnRun.textContent = '⏸ 暂停';
+  runStep();
+  timerId = setInterval(() => { if (playing) runStep(); }, delay());
+}
+function stop() {
+  playing = false;
+  clearInterval(timerId);
+  btnRun.textContent = '▶ 运行示例';
+  if (stepIdx >= steps.length) { btnRun.disabled = true; btnStep.disabled = true; }
+}
+
+btnRun.onclick = () => { playing ? stop() : play(); };
+btnStep.onclick = () => { if (!playing && stepIdx < steps.length) runStep(); };
+btnReset.onclick = () => {
+  stop(); clearInterval(timerId);
+  stackArea.innerHTML = ''; queueArea.innerHTML = ''; webapiArea.innerHTML = ''; logEl.innerHTML = '';
+  steps = buildSteps(); stepIdx = 0;
+  btnRun.disabled = false; btnStep.disabled = false;
+  btnStep.textContent = '⏭ 单步执行';
+  log('📋 演示代码:', '');
+  log('  console.log("start");', '');
+  log('  setTimeout(() => console.log("timeout 0s"), 0);', '');
+  log('  setTimeout(() => console.log("timeout 1s"), 1000);', '');
+  log('  console.log("end");', '');
+  log('— 点击「运行示例」或「单步执行」开始 —', 'lg-loop');
+};
+btnReset.onclick();
+</script>
+</body>
+</html>

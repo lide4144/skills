@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Speculative Decoding 投机解码动画</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #0f1420; color: #e8ecf4;
+         display: flex; flex-direction: column; align-items: center; padding: 24px; min-height: 100vh; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #8a93a8; font-size: 13px; margin-bottom: 20px; }
+  .stage { width: 760px; max-width: 95vw; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 14px 0; }
+  .label { width: 150px; font-size: 13px; color: #9fb2d8; text-align: right; flex-shrink: 0; }
+  .label b { display: block; font-size: 14px; color: #cfe0ff; }
+  .tokens { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tok { padding: 8px 10px; border-radius: 8px; background: #1c2540; border: 1px solid #33406b;
+         font-size: 14px; min-width: 44px; text-align: center; opacity: 0; transform: translateY(8px);
+         transition: all .35s ease; }
+  .tok.show { opacity: 1; transform: translateY(0); }
+  .tok.draft { border-color: #7a5cff; background: #241d4d; }
+  .tok.accept { border-color: #2fbf71; background: #12352a; }
+  .tok.reject { border-color: #e5484d; background: #471e21; }
+  .tok.replace { border-color: #f5a623; background: #4a3413; }
+  .verdict { font-size: 12px; display: block; margin-top: 3px; color: #aeb8d0; }
+  .status { margin: 18px 0; padding: 12px 16px; background: #16203a; border-left: 3px solid #4a7dff;
+            border-radius: 6px; font-size: 14px; min-height: 44px; }
+  .stats { display: flex; gap: 24px; margin: 14px 0; font-size: 14px; }
+  .stat { background: #16203a; padding: 10px 18px; border-radius: 8px; }
+  .stat b { color: #7fd4ff; font-size: 18px; }
+  button { background: #4a7dff; color: #fff; border: none; padding: 10px 22px; border-radius: 8px;
+           font-size: 14px; cursor: pointer; margin-right: 10px; }
+  button:hover { background: #6190ff; }
+  button:disabled { background: #2a3references560; cursor: default; opacity: .5; }
+  .cmp { margin-top: 22px; width: 100%; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+  .bar-label { width: 150px; text-align: right; color: #9fb2d8; }
+  .bar { height: 18px; border-radius: 4px; width: 0; transition: width 1.2s ease; }
+  .bar.naive { background: #5a6685; }
+  .bar.spec { background: linear-gradient(90deg, #2fbf71, #7fd4ff); }
+</style>
+</head>
+<body>
+<h1>Speculative Decoding 投机解码</h1>
+<div class="sub">Draft 起草 → Target 并行验证 Verify → Accept / Reject —— 输出不变，纯加速</div>
+<div class="stage">
+  <div class="row">
+    <div class="label"><b>Draft 草稿模型</b>小、快、连猜 k 个</div>
+    <div class="tokens" id="draftRow"></div>
+  </div>
+  <div class="row">
+    <div class="label"><b>Target 目标模型</b>大、准、一次并行验证</div>
+    <div class="tokens" id="verdictRow"></div>
+  </div>
+  <div class="row">
+    <div class="label"><b>本轮最终输出</b></div>
+    <div class="tokens" id="outRow"></div>
+  </div>
+  <div class="status" id="status">点击「开始一轮」观察一次 draft-verify 循环。文本框里的字只是演示用的假 token。</div>
+  <div class="stats">
+    <div class="stat">本轮接受率<br><b id="accRate">-</b></div>
+    <div class="stat">大模型前向次数<br><b id="fwdCount">0</b></div>
+    <div class="stat">累计产出 token<br><b id="tokCount">0</b></div>
+    <div class="stat">平均每前向产出<br><b id="eff">-</b></div>
+  </div>
+  <div>
+    <button id="stepBtn" onclick="runRound()">开始一轮</button>
+    <button id="autoBtn" onclick="toggleAuto()">自动播放</button>
+    <button onclick="resetAll()">重置</button>
+  </div>
+  <div class="cmp">
+    <div class="bar-row"><div class="bar-label">逐 token 生成</div><div class="bar naive" id="barNaive"></div></div>
+    <div class="bar-row"><div class="bar-label">Speculative Decoding</div><div class="bar spec" id="barSpec"></div></div>
+  </div>
+</div>
+<script>
+const VOCAB = ["春风","吹","过","的","湖面","上","，","阳光","碎","成","金色","的","鳞片","闪闪","发光","。"];
+const K = 4; // 每轮草稿长度
+let pos = 0, fwd = 0, produced = 0, auto = null;
+
+function makeTok(text, cls, verdict) {
+  const d = document.createElement('div');
+  d.className = 'tok ' + cls;
+  d.innerHTML = text + (verdict ? `<span class="verdict">${verdict}</span>` : '');
+  return d;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function setStatus(t) { document.getElementById('status').innerHTML = t; }
+function updateStats(acc) {
+  document.getElementById('fwdCount').textContent = fwd;
+  document.getElementById('tokCount').textContent = produced;
+  document.getElementById('accRate').textContent = acc == null ? '-' : acc + '%';
+  document.getElementById('eff').textContent = fwd ? (produced / fwd).toFixed(2) + ' tok/前向' : '-';
+  const naiveW = 100, specW = fwd ? 100 * produced / fwd / 1.0 : 0; // naive = 1 tok/前向
+  document.getElementById('barNaive').style.width = naiveW + 'px';
+  document.getElementById('barSpec').style.width = Math.min(620, produced / Math.max(1,fwd) * 100) + 'px';
+}
+
+async function runRound() {
+  if (pos >= VOCAB.length) { setStatus('演示文本已全部生成完，点「重置」再来一遍。'); stopAuto(); return; }
+  document.getElementById('stepBtn').disabled = true;
+  const draftRow = document.getElementById('draftRow');
+  const verdictRow = document.getElementById('verdictRow');
+  draftRow.innerHTML = ''; verdictRow.innerHTML = '';
+
+  // 1) Draft 连猜 K 个（这里模拟：草稿基本都对，偶尔猜错一个）
+  const draft = [];
+  for (let i = 0; i < K && pos + i < VOCAB.length; i++) {
+    const wrong = Math.random() < 0.22 && i > 0; // 越靠后越容易错；这里简化为随机
+    draft.push({ text: VOCAB[pos + i], correct: !wrong });
+  }
+  setStatus(`<b>第 1 步 Draft</b>：草稿模型一次性连猜 ${draft.length} 个 token（多次小前向，便宜）`);
+  for (const t of draft) {
+    const el = makeTok(t.text, 'draft show'); draftRow.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    await sleep(220);
+  }
+  await sleep(400);
+
+  // 2) Target 一次并行前向验证
+  fwd++;
+  setStatus(`<b>第 2 步 Verify</b>：目标模型<b>只跑一次前向</b>，并行给 ${draft.length} 个位置打分（本次前向 #${fwd}）`);
+  let nAccept = 0, rejectedAt = -1;
+  for (let i = 0; i < draft.length; i++) {
+    const t = draft[i];
+    if (rejectedAt === -1 && t.correct) { nAccept++; }
+    else if (rejectedAt === -1) { rejectedAt = i; }
+    const cls = rejectedAt === -1 || i < rejectedAt ? 'accept' : (i === rejectedAt ? 'reject' : 'draft');
+    const verdict = i < nAccept ? '✓ accept' : (i === rejectedAt ? '✗ reject' : '丢弃');
+    const el = makeTok(t.text, cls + ' show', verdict); verdictRow.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    await sleep(300);
+  }
+  await sleep(400);
+
+  // 3) 接受的进输出，被拒位置用大模型自己的 token 替换
+  const outRow = document.getElementById('outRow');
+  const gain = (rejectedAt === -1 ? draft.length : rejectedAt) + 1; // +1：拒绝位也由大模型补一个正确的
+  for (let i = 0; i < gain && pos < VOCAB.length; i++, pos++, produced++) {
+    const isReplace = (rejectedAt !== -1 && i === rejectedAt);
+    const el = makeTok(VOCAB[pos], (isReplace ? 'replace' : 'accept') + ' show', isReplace ? '大模型替换' : '');
+    outRow.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    await sleep(180);
+  }
+  const acc = Math.round(100 * (rejectedAt === -1 ? draft.length : rejectedAt) / draft.length);
+  setStatus(`<b>第 3 步 Accept</b>：本轮接受 ${rejectedAt === -1 ? draft.length : rejectedAt} 个 + 大模型补 1 个 = <b>1 次大模型前向净产出 ${gain} 个 token</b>。传统方式同样产出要 ${gain} 次前向。`);
+  updateStats(acc);
+  document.getElementById('stepBtn').disabled = false;
+  document.getElementById('stepBtn').textContent = '再来一轮';
+  if (pos >= VOCAB.length) { setStatus('全部生成完毕！对比底部两根 bar：同样多的大模型前向次数，投机解码产出多得多。'); stopAuto(); }
+}
+
+function toggleAuto() {
+  if (auto) { stopAuto(); return; }
+  document.getElementById('autoBtn').textContent = '暂停';
+  auto = setInterval(() => { if (!document.getElementById('stepBtn').disabled) runRound(); }, 800);
+}
+function stopAuto() { clearInterval(auto); auto = null; document.getElementById('autoBtn').textContent = '自动播放'; }
+function resetAll() {
+  stopAuto(); pos = 0; fwd = 0; produced = 0;
+  ['draftRow','verdictRow','outRow'].forEach(id => document.getElementById(id).innerHTML = '');
+  document.getElementById('stepBtn').textContent = '开始一轮';
+  document.getElementById('barNaive').style.width = '0';
+  document.getElementById('barSpec').style.width = '0';
+  setStatus('点击「开始一轮」观察一次 draft-verify 循环。');
+  updateStats(null);
+}
+updateStats(null);
+</script>
+</body>
+</html>
